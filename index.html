@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>서울 재개발 추진 현황</title>
+<meta name="description" content="2026년 6월 말 기준 서울 재개발 추진 구역 302곳의 단계, 규모, 시공사를 지도로 보는 대시보드">
+<style>
+:root {
+  color-scheme: light;
+  --color-fg: #1c1c1a; --color-fg-muted: #6b6a64; --color-bg: #fcfcfb; --color-panel: #f3f2ee; --color-border-line: #e0dfd9;
+  --color-ok: #0a7d0a; --color-warn: #b46b00; --color-bad: #c13030;
+  --cds-text-secondary: #5f5e58; --cds-chart-grid: #e6e5e0; --cds-chart-axis: #b9b8b1; --cds-surface-popover: #ffffff; --cds-border: #dcdbd5;
+  --cds-shadow-popover: 0 4px 16px rgba(0,0,0,.12);
+  --font-anthropic-sans: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  --font-anthropic-serif: "Noto Serif KR", "AppleMyungjo", Georgia, serif;
+  --cds-font-size-caption: 12.5px; --cds-font-size-body: 15px; --cds-font-size-heading: 18px; --cds-font-size-title: 30px; --cds-font-weight-medium: 600;
+  --cds-gap-xs: 4px; --cds-gap-sm: 8px; --cds-gap-md: 14px; --cds-gap-lg: 20px; --cds-gap-xl: 30px; --cds-pad-lg: 16px; --cds-radius: 8px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  color-scheme: dark;
+  --color-fg: #f0efec; --color-fg-muted: #a6a59d; --color-bg: #1a1a19; --color-panel: #242423; --color-border-line: #3a3a37;
+  --color-ok: #4cc34c; --color-warn: #f0a83a; --color-bad: #e66767;
+  --cds-text-secondary: #b9b8b0; --cds-chart-grid: #333331; --cds-chart-axis: #5a5955; --cds-surface-popover: #2b2b29; --cds-border: #44443f;
+  --cds-shadow-popover: 0 4px 16px rgba(0,0,0,.5);
+} }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-fg: #f0efec; --color-fg-muted: #a6a59d; --color-bg: #1a1a19; --color-panel: #242423; --color-border-line: #3a3a37;
+  --color-ok: #4cc34c; --color-warn: #f0a83a; --color-bad: #e66767;
+  --cds-text-secondary: #b9b8b0; --cds-chart-grid: #333331; --cds-chart-axis: #5a5955; --cds-surface-popover: #2b2b29; --cds-border: #44443f;
+  --cds-shadow-popover: 0 4px 16px rgba(0,0,0,.5);
+}
+html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-anthropic-sans); font-size: 15px; }
+#dash-root { max-width: 1280px; margin: 0 auto; padding-block: 28px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); box-sizing: border-box; }
+.dash-select { font: inherit; font-size: 14px; color: var(--color-fg); background-color: var(--color-bg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: 6px 8px; }
+.sr a { color: inherit; }
+</style>
+<script src="vendor/d3-7.9.0.min.js"></script>
+<script>
+// 대시보드 런타임(최소 구현): 데이터 불러오기, 계산, 그리기
+(function () {
+  const files = { redev: ['data/redev.csv', 'csv'], zones: ['data/zones.json', 'json'], gu: ['data/gu.json', 'json'] };
+  const store = {}, calcs = {}, draws = {};
+  const run = (name) => {
+    const f = draws[name];
+    if (!f) return;
+    document.querySelectorAll('[data-draw="' + name + '"]').forEach((el) => {
+      try {
+        if (typeof f === 'function') f(el);
+        else { if (!el._made) el._made = f.mount ? f.mount(el) : {}; f.update(el, el._made); }
+      } catch (e) { console.error(name, e); }
+    });
+  };
+  window.dash = {
+    colors: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'],
+    data(id) {
+      if (store[id]) return store[id];
+      const c = calcs[id];
+      if (c) {
+        const ins = c.inputs.map((i) => store[i]);
+        if (ins.some((s) => !s || s.status !== 'ok')) return { status: 'loading', data: null };
+        if (!c.cache) c.cache = { status: 'ok', data: c.fn(...ins.map((s) => s.data)) };
+        return c.cache;
+      }
+      return { status: 'loading', data: [] };
+    },
+    calc(id, o) { calcs[id] = o; }, loader() {},
+    draw(name, fn) { if (fn) draws[name] = fn; else run(name); },
+    onData(fn) { fn(); }, params() { return {}; }, setParams() {}, resetParams() {}, setLink() {}, refresh() {},
+  };
+  window.__dashStart = () => {
+    const all = () => Object.keys(draws).forEach(run);
+    all();
+    Promise.all(Object.entries(files).map(([id, [url, kind]]) =>
+      (kind === 'csv' ? d3.csv(url) : d3.json(url))
+        .then((data) => { store[id] = { status: 'ok', data }; })
+        .catch(() => { store[id] = { status: 'error', data: [] }; })
+    )).then(all);
+    let w = window.innerWidth;
+    window.addEventListener('resize', () => { if (Math.abs(window.innerWidth - w) > 20) { w = window.innerWidth; all(); } });
+  };
+})();
+</script>
+<style>
+.sr { --sr-accent: #2a78d6; --sr-accent2: #eb6834; display: flex; flex-direction: column; gap: var(--cds-gap-xl); font-family: var(--font-anthropic-sans); color: var(--color-fg); }
+.sr-head h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0 0 var(--cds-gap-sm); text-wrap: balance; }
+.sr-take { margin: 0; max-width: 66ch; line-height: 1.6; }
+.sr-take b { font-variant-numeric: tabular-nums; }
+.sr-asof { margin: var(--cds-gap-xs) 0 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.sr-sec { display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+.sr-sec h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; text-wrap: balance; }
+.sr-note { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); max-width: 75ch; line-height: 1.5; }
+
+/* 지도 영역 */
+.sr-mapgrid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: var(--cds-gap-md); align-items: start; }
+@media (max-width: 820px) { .sr-mapgrid { grid-template-columns: minmax(0, 1fr); } }
+.sr-mapbox { position: relative; background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); overflow: hidden; min-width: 0; }
+.sr-map { position: relative; min-height: 420px; }
+.sr-map svg { display: block; touch-action: none; cursor: grab; }
+.sr-map svg:active { cursor: grabbing; }
+.sr-map .gu { fill: var(--color-bg); stroke: var(--cds-chart-axis); vector-effect: non-scaling-stroke; stroke-width: 1; }
+.sr-map .gu.on { fill: var(--color-panel); stroke: var(--color-fg); stroke-width: 1.6; }
+.sr-map .gulab { fill: var(--cds-text-secondary); font-size: 11px; pointer-events: none; text-anchor: middle; paint-order: stroke; stroke: var(--color-bg); stroke-width: 3px; stroke-linejoin: round; }
+.sr-map .zone { stroke: var(--color-bg); stroke-width: .7; vector-effect: non-scaling-stroke; cursor: pointer; }
+.sr-map .dot { stroke: var(--color-bg); stroke-width: 1; vector-effect: non-scaling-stroke; cursor: pointer; }
+.sr-map .off { opacity: .08; pointer-events: none; }
+.sr-map .zone:hover, .sr-map .dot:hover { stroke: var(--color-fg); stroke-width: 1.5; }
+.sr-map .sel { stroke: var(--color-fg) !important; stroke-width: 2.5 !important; }
+.sr-zoom { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 4px; z-index: 3; }
+.sr-zoom button { width: 32px; height: 32px; font: inherit; font-size: 16px; line-height: 1; color: var(--color-fg); background: var(--color-bg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); cursor: pointer; }
+.sr-zoom button:focus-visible { outline: 2px solid var(--sr-accent); outline-offset: 1px; }
+.sr-mapcol { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sr-maphint { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+
+/* 단계 범례 = 필터 */
+.sr-stages { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+@media (max-width: 560px) { .sr-stages { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.sr-stage { display: flex; flex-direction: column; gap: 4px; align-items: stretch; text-align: left; padding: 0 0 6px; font: inherit; color: var(--color-fg); background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; min-width: 0; }
+.sr-stage .bar { height: 12px; border-radius: 3px; }
+.sr-stage .nm { font-size: var(--cds-font-size-caption); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sr-stage .ct { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.sr-stage[aria-pressed="false"] { opacity: .35; }
+.sr-stage:focus-visible { outline: 2px solid var(--sr-accent); outline-offset: 2px; }
+.sr-stagebar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--cds-gap-sm); }
+.sr-mini { font: inherit; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); background: none; border: 0; text-decoration: underline; cursor: pointer; padding: 0; }
+.sr-controls { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: flex-end; }
+.sr-controls label { display: flex; flex-direction: column; gap: 4px; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.sr-input { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background-color: var(--color-bg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: 6px 10px; min-width: 0; width: 12em; }
+.sr-count { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); padding-bottom: 6px; font-variant-numeric: tabular-nums; }
+
+/* 상세 패널 */
+.sr-panel { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-md); min-width: 0; }
+.sr-panel .empty { color: var(--color-fg-muted); font-size: var(--cds-font-size-body); line-height: 1.6; margin: 0; }
+.sr-panel .gu { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.sr-panel h3 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 1.6rem; margin: 2px 0 0; line-height: 1.2; overflow-wrap: anywhere; }
+.sr-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.sr-badge { font-size: var(--cds-font-size-caption); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--color-border-line); color: var(--color-fg); white-space: nowrap; }
+.sr-badge.stage { border-color: transparent; color: #0b0b0b; font-weight: var(--cds-font-weight-medium); }
+.sr-badge:empty { display: none; }
+.sr-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sr-steps li { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; align-items: center; font-size: var(--cds-font-size-caption); padding: 3px 0; position: relative; color: var(--color-fg-muted); }
+.sr-steps li .pt { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--color-border-line); background: var(--color-bg); box-sizing: border-box; z-index: 1; }
+.sr-steps li:not(:last-child)::after { content: ""; position: absolute; left: 5px; top: 15px; height: calc(100% - 6px); width: 2px; background: var(--color-border-line); }
+.sr-steps li.done { color: var(--color-fg); }
+.sr-steps li.done .pt { border-color: transparent; }
+.sr-steps li.now { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+.sr-steps li.now .pt { box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-fg) 25%, transparent); }
+.sr-steps .dt { font-variant-numeric: tabular-nums; }
+.sr-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: var(--cds-font-size-caption); }
+.sr-kv dt { color: var(--color-fg-muted); }
+.sr-kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sr-recent { margin: 0; font-size: var(--cds-font-size-caption); line-height: 1.5; padding: 8px 10px; border-radius: var(--cds-radius); background: var(--color-bg); }
+.sr-src { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); overflow-wrap: anywhere; }
+.sr-src a { color: inherit; }
+.sr-nomap { font-size: var(--cds-font-size-caption); color: var(--color-warn); margin: 0; }
+
+/* 요약 타일·차트·표 */
+.sr-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--cds-gap-md); }
+.sr-tile { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-xs); min-width: 0; }
+.sr-tile .lab { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.sr-tile .num { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 2rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.sr-tile .sub { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.sr-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); list-style: none; margin: 0; padding: 0; }
+.sr-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.sr-sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+.sr-chart { position: relative; min-height: 200px; }
+.sr-chart svg { display: block; overflow: visible; }
+.sr-chart text { fill: var(--color-fg); font-size: 12px; font-family: var(--font-anthropic-sans); }
+.sr-chart .tick text, .sr-chart .muted { fill: var(--cds-text-secondary); font-size: var(--cds-font-size-caption); }
+.sr-chart .grid line { stroke: var(--cds-chart-grid); }
+.sr-chart .domain { display: none; }
+.sr-tip { position: absolute; pointer-events: none; z-index: 5; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); box-shadow: var(--cds-shadow-popover); border-radius: var(--cds-radius); padding: 8px 10px; font-size: var(--cds-font-size-caption); line-height: 1.5; max-width: 260px; color: var(--color-fg); }
+.sr-tip .t { font-weight: var(--cds-font-weight-medium); }
+.sr-tip .s { color: var(--cds-text-secondary); }
+.sr-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--cds-gap-xl); }
+.sr-tablewrap { overflow-x: auto; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); max-height: 560px; overflow-y: auto; }
+.sr-table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.sr-table th, .sr-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--color-border-line); white-space: nowrap; }
+.sr-table th { position: sticky; top: 0; background: var(--color-panel); font-weight: var(--cds-font-weight-medium); cursor: pointer; user-select: none; z-index: 1; }
+.sr-table th[aria-sort="ascending"]::after { content: " ▲"; color: var(--color-fg-muted); }
+.sr-table th[aria-sort="descending"]::after { content: " ▼"; color: var(--color-fg-muted); }
+.sr-table td.n, .sr-table th.n { text-align: right; }
+.sr-table tbody tr { cursor: pointer; }
+.sr-table tbody tr:hover { background: var(--color-panel); }
+.sr-table tbody tr.sel { background: color-mix(in oklab, var(--sr-accent) 14%, transparent); }
+.sr-pill { display: inline-flex; align-items: center; gap: 6px; }
+.sr-pill .sr-sw { width: 10px; height: 10px; }
+.sr-up { color: var(--color-ok); }
+.sr-new { color: var(--color-warn); }
+.sr details { border-top: 1px solid var(--color-border-line); padding-top: var(--cds-gap-md); }
+.sr details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
+.sr details ul { margin: var(--cds-gap-sm) 0 0; padding-left: 1.2em; line-height: 1.6; max-width: 75ch; }
+[data-dash-source-state=refreshing] { opacity: .5; }
+.sr-fail { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+</style>
+</head>
+<body>
+<div id="dash-root">
+
+
+<div class="sr" id="sr">
+  <header class="sr-head" id="overview">
+    <h1>서울 재개발 추진 현황</h1>
+    <p class="sr-take" data-read lang="ko">2026년 6월 말 기준 서울에서 재개발을 추진 중인 구역은 <b data-draw="k-total" data-source="kpi" data-field="구역수" data-row="0">—</b>곳이고, 그중 <b data-draw="k-late" data-source="kpi" data-field="막바지" data-row="0">—</b>곳이 관리처분인가나 착공까지 와 있습니다. 구역이 가장 많은 자치구는 <b data-draw="k-topgu" data-source="kpi" data-field="최다자치구" data-row="0">—</b>(<b data-draw="k-topgu-n" data-source="kpi" data-field="최다자치구_구역수" data-row="0">—</b>곳)입니다. 지도에서 구역을 누르면 단계별 인허가 날짜와 규모를 볼 수 있습니다.</p>
+    <p class="sr-asof">자료 기준일 2026-06-30 · 서울시 「`26.6월말 기준 재개발·재건축 추진현황」 · 정리 2026-11-16 · 재건축, 모아타운·가로주택 등 소규모 정비는 제외</p>
+  </header>
+
+  <section class="sr-sec" id="map">
+    <div class="sr-stagebar">
+      <h2>구역 지도</h2>
+      <button type="button" class="sr-mini" id="sr-allstages">모든 단계 보기</button>
+    </div>
+    <div class="sr-stages" role="group" aria-label="단계별로 보기">
+      <button type="button" class="sr-stage" data-st="1" aria-pressed="true"><span class="bar"></span><span class="nm">정비구역지정</span><span class="ct" data-draw="st-ct" data-st="1" data-source="by_stage" data-field="합계" data-row="0">—</span></button>
+      <button type="button" class="sr-stage" data-st="2" aria-pressed="true"><span class="bar"></span><span class="nm">추진위원회</span><span class="ct" data-draw="st-ct" data-st="2" data-source="by_stage" data-field="합계" data-row="1">—</span></button>
+      <button type="button" class="sr-stage" data-st="3" aria-pressed="true"><span class="bar"></span><span class="nm">조합설립인가</span><span class="ct" data-draw="st-ct" data-st="3" data-source="by_stage" data-field="합계" data-row="2">—</span></button>
+      <button type="button" class="sr-stage" data-st="4" aria-pressed="true"><span class="bar"></span><span class="nm">건축심의</span><span class="ct" data-draw="st-ct" data-st="4" data-source="by_stage" data-field="합계" data-row="3">—</span></button>
+      <button type="button" class="sr-stage" data-st="5" aria-pressed="true"><span class="bar"></span><span class="nm">사업시행인가</span><span class="ct" data-draw="st-ct" data-st="5" data-source="by_stage" data-field="합계" data-row="4">—</span></button>
+      <button type="button" class="sr-stage" data-st="6" aria-pressed="true"><span class="bar"></span><span class="nm">관리처분인가</span><span class="ct" data-draw="st-ct" data-st="6" data-source="by_stage" data-field="합계" data-row="5">—</span></button>
+      <button type="button" class="sr-stage" data-st="7" aria-pressed="true"><span class="bar"></span><span class="nm">착공</span><span class="ct" data-draw="st-ct" data-st="7" data-source="by_stage" data-field="합계" data-row="6">—</span></button>
+    </div>
+    <div class="sr-controls">
+      <label for="sr-gu">자치구<select id="sr-gu" class="dash-select" data-draw="gu-select" data-source="redev"></select></label>
+      <label for="sr-type">유형<select id="sr-type" class="dash-select"><option value="">전체</option><option value="주택정비형 재개발">주택정비형</option><option value="도시정비형 재개발">도시정비형</option></select></label>
+      <label for="sr-flag">기타<select id="sr-flag" class="dash-select"><option value="">전체</option><option value="chg">3월 대비 단계 변화·신규</option><option value="pub">공공재개발</option><option value="chok">재정비촉진구역</option><option value="con">시공사 확인된 곳</option></select></label>
+      <label for="sr-q">검색<input id="sr-q" class="sr-input" type="search" placeholder="구역명·주소·시공사"></label>
+      <span class="sr-count" data-draw="count">—</span>
+    </div>
+    <div class="sr-mapgrid">
+      <div class="sr-mapcol">
+      <div class="sr-mapbox">
+        <div class="sr-zoom">
+          <button type="button" id="sr-zin" aria-label="지도 확대">+</button>
+          <button type="button" id="sr-zout" aria-label="지도 축소">−</button>
+          <button type="button" id="sr-zreset" aria-label="서울 전체 보기">⤢</button>
+        </div>
+        <div class="sr-map" data-draw="map" data-source="zones gu redev"></div>
+      </div>
+
+      <span class="sr-maphint">드래그로 이동 · 휠이나 두 손가락으로 확대 · 구역을 누르면 상세 정보</span>
+      </div>
+
+      <aside class="sr-panel" id="detail" aria-live="polite">
+        <p class="empty" id="sr-empty">지도나 아래 목록에서 구역을 누르면 여기에 단계별 진행 날짜, 세대수, 면적, 시공사가 나옵니다. 작은 점은 도면이 작은 구역이고, 확대하면 실제 경계가 보입니다.</p>
+        <div id="sr-card" hidden>
+          <div>
+            <span class="gu" data-draw="d-gu" data-source="redev" data-field="자치구">—</span>
+            <h3 data-draw="d-name" data-source="redev" data-field="구역명">—</h3>
+          </div>
+          <div class="sr-badges">
+            <span class="sr-badge stage" data-draw="d-stage" data-source="redev" data-field="단계"></span>
+            <span class="sr-badge" data-draw="d-type" data-source="redev" data-field="사업유형"></span>
+            <span class="sr-badge" data-draw="d-pub"></span>
+            <span class="sr-badge" data-draw="d-chok"></span>
+          </div>
+          <p class="sr-nomap" data-draw="d-nomap" hidden>이 구역은 도면을 찾지 못해 지도에는 표시되지 않습니다.</p>
+          <p class="sr-recent">최근 진행: <b data-draw="d-recent" data-source="redev" data-field="최근이벤트">—</b> (<span data-draw="d-recentdt" data-source="redev" data-field="최근일자">—</span>)<span data-draw="d-chg"></span></p>
+          <ol class="sr-steps" aria-label="단계별 인허가 날짜">
+            <li data-draw="d-step" data-st="1"><span class="pt"></span><span>정비구역지정</span><span class="dt" data-source="redev" data-field="일자_구역지정"></span></li>
+            <li data-draw="d-step" data-st="2"><span class="pt"></span><span>추진위원회 승인</span><span class="dt" data-source="redev" data-field="일자_추진위"></span></li>
+            <li data-draw="d-step" data-st="3"><span class="pt"></span><span>조합설립인가</span><span class="dt" data-source="redev" data-field="일자_조합설립"></span></li>
+            <li data-draw="d-step" data-st="4"><span class="pt"></span><span>건축심의</span><span class="dt" data-source="redev" data-field="일자_건축심의"></span></li>
+            <li data-draw="d-step" data-st="5"><span class="pt"></span><span>사업시행인가</span><span class="dt" data-source="redev" data-field="일자_사업시행"></span></li>
+            <li data-draw="d-step" data-st="6"><span class="pt"></span><span>관리처분인가</span><span class="dt" data-source="redev" data-field="일자_관리처분"></span></li>
+            <li data-draw="d-step" data-st="7"><span class="pt"></span><span>착공</span><span class="dt" data-source="redev" data-field="일자_착공"></span></li>
+          </ol>
+          <dl class="sr-kv">
+            <dt>계획 세대수</dt><dd data-draw="d-units" data-source="redev" data-field="건립세대수">—</dd>
+            <dt>분양 / 임대</dt><dd data-draw="d-split">—</dd>
+            <dt>기존 가구수</dt><dd data-draw="d-exist" data-source="redev" data-field="기존가구수">—</dd>
+            <dt>면적</dt><dd data-draw="d-area" data-source="redev" data-field="면적_m2">—</dd>
+            <dt>이주</dt><dd data-draw="d-move">—</dd>
+            <dt>시공사</dt><dd data-draw="d-con" data-source="redev" data-field="시공사">—</dd>
+            <dt>주소</dt><dd data-draw="d-addr" data-source="redev" data-field="지번주소">—</dd>
+          </dl>
+          <div class="sr-src" data-draw="d-consrc"></div>
+        </div>
+      </aside>
+    </div>
+    <p class="sr-note">구역 도면은 서울시 도시계획정보(UPIS) 정비구역 경계를 구역명으로 자동 연결한 것입니다. 302곳 중 도면을 찾은 곳만 지도에 나오며, 나머지(주로 중구·종로구의 작은 도심 지구)는 아래 목록에서 눌러 상세 정보를 볼 수 있습니다.</p>
+  </section>
+
+  <div class="sr-tiles" id="tiles">
+    <div class="sr-tile" id="tile-total"><span class="lab">추진 중인 재개발 구역</span><span class="num" data-draw="t-total" data-source="kpi" data-field="구역수" data-row="0">—</span><span class="sub">주택정비형 <span data-draw="t-house" data-source="kpi" data-field="주택정비형" data-row="0">—</span> · 도시정비형 <span data-draw="t-city" data-source="kpi" data-field="도시정비형" data-row="0">—</span></span></div>
+    <div class="sr-tile" id="tile-late"><span class="lab">관리처분인가 이후(관리처분·착공)</span><span class="num" data-draw="t-late" data-source="kpi" data-field="막바지" data-row="0">—</span><span class="sub">이주·철거 또는 공사 중인 단계</span></div>
+    <div class="sr-tile" id="tile-units"><span class="lab">계획 건립세대수 합계</span><span class="num" data-draw="t-units" data-source="kpi" data-field="건립세대수" data-row="0">—</span><span class="sub">구역지정 전 계획치 포함, 확정 아님</span></div>
+    <div class="sr-tile" id="tile-public"><span class="lab">공공재개발 · 재정비촉진구역</span><span class="num"><span data-draw="t-public" data-source="kpi" data-field="공공" data-row="0">—</span> · <span data-draw="t-chok" data-source="kpi" data-field="재촉" data-row="0">—</span></span><span class="sub">공공 시행 / 뉴타운(재촉지구) 내 구역</span></div>
+  </div>
+
+  <div class="sr-two">
+    <section class="sr-sec" id="by-stage">
+      <h2>단계별 구역 수</h2>
+      <ul class="sr-legend" aria-hidden="true">
+        <li><span class="sr-sw sr-sw-a"></span>주택정비형 재개발</li>
+        <li><span class="sr-sw sr-sw-b"></span>도시정비형 재개발</li>
+      </ul>
+      <div class="sr-chart" data-draw="stage-chart" data-source="by_stage"></div>
+      <p class="sr-note">주택정비형은 노후 주거지를 아파트 단지로, 도시정비형(옛 도시환경정비)은 도심·역세권 상업지를 업무·주상복합으로 바꾸는 사업입니다.</p>
+    </section>
+    <section class="sr-sec" id="by-gu">
+      <h2>자치구별 구역 수와 단계</h2>
+      <div class="sr-chart" data-draw="gu-chart" data-source="by_gu"></div>
+      <p class="sr-note">색은 지도와 같은 단계 색입니다. 막대를 누르면 지도가 그 자치구로 이동합니다. 강남구·서초구는 재개발 없이 재건축만 있습니다.</p>
+    </section>
+  </div>
+
+  <section class="sr-sec" id="list">
+    <h2>구역 목록</h2>
+    <p class="sr-note">지도 위의 필터가 이 목록에도 똑같이 적용됩니다. 행을 누르면 지도에서 그 구역을 찾아 상세 정보를 보여 줍니다.</p>
+    <div class="sr-tablewrap">
+      <table class="sr-table" data-source="redev" data-row-key="CODE">
+        <thead><tr>
+          <th data-field="자치구" data-sort="자치구">자치구</th>
+          <th data-field="구역명" data-sort="구역명">구역명</th>
+          <th data-field="사업유형" data-sort="사업유형">유형</th>
+          <th data-field="단계" data-sort="단계순서" aria-sort="descending">단계</th>
+          <th data-field="최근이벤트" data-sort="최근이벤트">최근 진행</th>
+          <th data-field="최근일자" data-sort="최근일자">일자</th>
+          <th data-field="변화_26년3월대비" data-sort="변화_26년3월대비">3월 대비</th>
+          <th class="n" data-field="건립세대수" data-sort="건립세대수">계획 세대수</th>
+          <th class="n" data-field="면적_m2" data-sort="면적_m2">면적(㎡)</th>
+          <th data-field="시공사" data-sort="시공사">시공사</th>
+        </tr></thead>
+        <tbody data-draw="table"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="sr-note sr-foot">데이터와 만드는 스크립트: <a href="https://github.com/AIDevPaul/Study_RealEstate">github.com/AIDevPaul/Study_RealEstate</a> · <a href="data/redev.csv">구역 목록 CSV 내려받기</a></p>
+
+  <details id="notes">
+    <summary>자료 출처와 빠졌을 수 있는 것</summary>
+    <ul>
+      <li>주 자료: 서울 열린데이터광장 OA-22856 「(26년 6월기준) 서울시 정비사업 추진현황」. 3월 기준 파일과 비교해 ‘3월 대비’ 열을 만들었습니다.</li>
+      <li>보조 자료: 정비사업 정보몽땅 사업장 목록(2026-11-16 조회), 서울시 의제처리구역 위치정보(UPIS, 2026-09) 정비구역 도면, 2021년 서울시 정비사업 데이터, 재정비촉진지구 통계(25.1).</li>
+      <li>‘최근 진행’은 서울시 자료의 단계별 인허가 날짜 중 가장 최근 항목입니다.</li>
+      <li>시공사는 공식 통계에 없는 항목이라 2025~2026년 기사로 확인한 주요 구역만 적었습니다. 빈칸은 미선정이 아니라 미확인입니다.</li>
+      <li>6월 말 이후(7~11월)의 지정·인가 변화는 반영되지 않았습니다.</li>
+      <li>신속통합기획·공공재개발 후보지 중 아직 정비구역으로 지정되지 않은 곳은 서울시 추진현황 표에 없어 빠져 있습니다.</li>
+      <li>모아타운·가로주택정비·소규모재개발은 다른 법(빈집 및 소규모주택 정비법)에 따른 사업이라 이 화면에서 제외했고, 저장소의 엑셀 파일에 참고 시트로 담았습니다.</li>
+      <li>구역명 자동 매칭이라 면적·도면이 일부 틀릴 수 있습니다. 미아2·마천1 등 면적이 가구수와 맞지 않는 곳은 2021년 자료 면적으로 바꿨습니다.</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+window.SR = { q: '', gu: '', type: '', flag: '', stages: new Set([1, 2, 3, 4, 5, 6, 7]), sort: '단계순서', dir: -1, sel: null };
+window.SR_STAGES = ['정비구역지정', '추진위원회', '조합설립인가', '건축심의', '사업시행인가', '관리처분인가', '착공'];
+window.srFmt = d3.format(',');
+window.srNum = (v) => { const s = String(v ?? '').replace(/,/g, ''); if (s === '') return null; const x = +s; return Number.isFinite(x) ? x : null; };
+window.srStr = (v) => (v == null ? '' : String(v));
+
+// 단계 색: 노랑-초록-파랑 그라데이션. 어두운 화면에서는 뒤 단계가 밝아지도록 뒤집음
+window.srIsDark = () => {
+  const root = document.querySelector('#sr');
+  const c = root ? d3.color(getComputedStyle(root).color) : null;
+  return c ? (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255 > 0.55 : false;
+};
+window.srStageColor = (n) => {
+  const t = (n - 1) / 6;
+  return window.srDark ? d3.interpolateYlGnBu(0.86 - t * 0.74) : d3.interpolateYlGnBu(0.2 + t * 0.8);
+};
+window.srPaint = () => {
+  window.srDark = window.srIsDark();
+  document.querySelectorAll('#sr').forEach((el) => { el.style.setProperty('--sr-accent', dash.colors[0]); el.style.setProperty('--sr-accent2', dash.colors[1]); });
+  document.querySelectorAll('.sr-sw-a').forEach((el) => { el.style.background = 'var(--sr-accent)'; });
+  document.querySelectorAll('.sr-sw-b').forEach((el) => { el.style.background = 'var(--sr-accent2)'; });
+  document.querySelectorAll('.sr-stage[data-st] .bar').forEach((el) => { el.style.background = window.srStageColor(+el.parentElement.dataset.st); });
+};
+window.srPaint();
+if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { window.srPaint(); window.srRedrawAll(); });
+
+window.srTip = (wrap) => {
+  const tip = document.createElement('div');
+  tip.className = 'sr-tip'; tip.hidden = true; wrap.appendChild(tip);
+  return {
+    show(ev, title, lines) {
+      tip.replaceChildren();
+      const t = document.createElement('div'); t.className = 't'; t.textContent = title; tip.appendChild(t);
+      lines.forEach((l) => { const s = document.createElement('div'); s.className = 's'; s.textContent = l; tip.appendChild(s); });
+      tip.hidden = false;
+      const r = wrap.getBoundingClientRect();
+      let x = ev.clientX - r.left + 12, y = ev.clientY - r.top + 12;
+      const w = tip.offsetWidth, h = tip.offsetHeight;
+      if (x + w > r.width) x = Math.max(0, ev.clientX - r.left - w - 12);
+      if (y + h > r.height) y = Math.max(0, ev.clientY - r.top - h - 12);
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    },
+    hide() { tip.hidden = true; },
+  };
+};
+
+window.srFiltered = (rows) => {
+  const S = window.SR, q = S.q.trim().toLowerCase();
+  return rows.filter((r) => {
+    if (S.gu && r.자치구 !== S.gu) return false;
+    if (S.type && r.사업유형 !== S.type) return false;
+    if (!S.stages.has(+r.단계순서)) return false;
+    if (S.flag === 'chg' && !r.변화_26년3월대비) return false;
+    if (S.flag === 'pub' && r.공공민간 !== '공공') return false;
+    if (S.flag === 'chok' && r.재촉지구 !== 'Y') return false;
+    if (S.flag === 'con' && !r.시공사) return false;
+    if (q && ![r.구역명, r.지번주소, r.도로명주소, r.시공사, r.자치구].map(window.srStr).join(' ').toLowerCase().includes(q)) return false;
+    return true;
+  });
+};
+
+window.SR_DETAIL = ['d-gu', 'd-name', 'd-stage', 'd-type', 'd-pub', 'd-chok', 'd-nomap', 'd-recent', 'd-recentdt', 'd-chg', 'd-step', 'd-units', 'd-split', 'd-exist', 'd-area', 'd-move', 'd-con', 'd-addr', 'd-consrc'];
+window.srRedrawAll = () => { ['map', 'table', 'count', 'gu-chart', 'stage-chart'].concat(window.SR_DETAIL).forEach((n) => dash.draw(n)); };
+window.srSelect = (code, opts = {}) => {
+  window.SR.sel = code == null ? null : String(code);
+  document.querySelectorAll('#sr-empty').forEach((el) => { el.hidden = window.SR.sel != null; });
+  document.querySelectorAll('#sr-card').forEach((el) => { el.hidden = window.SR.sel == null; });
+  window.SR.focus = opts.focus ? window.SR.sel : null;
+  ['map', 'table'].concat(window.SR_DETAIL).forEach((n) => dash.draw(n));
+  if (opts.scroll) document.querySelectorAll('#map').forEach((el) => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  else if (window.SR.sel != null && window.innerWidth < 820) document.querySelectorAll('#detail').forEach((el) => el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+};
+window.srRow = () => {
+  const r = dash.data('redev');
+  if (r.status !== 'ok' || window.SR.sel == null) return null;
+  return r.data.find((d) => String(d.CODE) === window.SR.sel) || null;
+};
+</script>
+
+<script>
+dash.calc('kpi', {
+  title: '핵심 수치',
+  description: '구역 수, 단계별 수, 계획 건립세대수 합계, 가장 많은 자치구',
+  inputs: ['redev'],
+  fn: (redev) => {
+    const n = (v) => +String(v ?? '0').replace(/,/g, '') || 0;
+    const cnt = (f) => redev.filter(f).length;
+    const byGu = d3.rollups(redev, (v) => v.length, (r) => r.자치구).sort((a, b) => b[1] - a[1]);
+    return [{
+      구역수: redev.length,
+      주택정비형: cnt((r) => r.사업유형 === '주택정비형 재개발'),
+      도시정비형: cnt((r) => r.사업유형 === '도시정비형 재개발'),
+      막바지: cnt((r) => r.단계 === '착공' || r.단계 === '관리처분'),
+      건립세대수: d3.sum(redev, (r) => n(r.건립세대수)),
+      공공: cnt((r) => r.공공민간 === '공공'),
+      재촉: cnt((r) => r.재촉지구 === 'Y'),
+      최다자치구: byGu.length ? byGu[0][0] : '',
+      최다자치구_구역수: byGu.length ? byGu[0][1] : 0,
+    }];
+  },
+});
+
+dash.calc('by_stage', {
+  title: '단계별 구역 수',
+  description: '단계마다 주택정비형·도시정비형 재개발 구역 수',
+  inputs: ['redev'],
+  fn: (redev) => {
+    const order = ['구역지정', '추진위', '조합설립', '건축심의', '사업시행', '관리처분', '착공'];
+    const names = ['정비구역지정', '추진위원회', '조합설립인가', '건축심의', '사업시행인가', '관리처분인가', '착공'];
+    return order.map((s, i) => {
+      const rows = redev.filter((r) => r.단계 === s);
+      return { 단계: names[i], 단계순서: i + 1,
+        주택정비형: rows.filter((r) => r.사업유형 === '주택정비형 재개발').length,
+        도시정비형: rows.filter((r) => r.사업유형 === '도시정비형 재개발').length,
+        합계: rows.length };
+    });
+  },
+});
+
+dash.calc('by_gu', {
+  title: '자치구별 단계 분포',
+  description: '자치구마다 단계별 재개발 구역 수',
+  inputs: ['redev'],
+  fn: (redev) => {
+    const order = ['구역지정', '추진위', '조합설립', '건축심의', '사업시행', '관리처분', '착공'];
+    return d3.groups(redev, (r) => r.자치구).map(([gu, rows]) => {
+      const o = { 자치구: gu, 합계: rows.length };
+      order.forEach((s, i) => { o['s' + (i + 1)] = rows.filter((r) => r.단계 === s).length; });
+      return o;
+    }).sort((a, b) => b.합계 - a.합계 || d3.ascending(a.자치구, b.자치구));
+  },
+});
+</script>
+
+<script>
+// 요약 숫자
+[
+  ['k-total', '구역수'], ['k-late', '막바지'], ['k-topgu', '최다자치구'], ['k-topgu-n', '최다자치구_구역수'],
+  ['t-total', '구역수'], ['t-house', '주택정비형'], ['t-city', '도시정비형'], ['t-late', '막바지'], ['t-units', '건립세대수'], ['t-public', '공공'], ['t-chok', '재촉'],
+].forEach(([name, field]) => {
+  dash.draw(name, (el) => {
+    const k = dash.data('kpi');
+    if (k.status !== 'ok' || !k.data || !k.data.length) { el.textContent = '—'; return; }
+    const v = k.data[0][field];
+    el.textContent = typeof v === 'number' ? window.srFmt(v) : window.srStr(v);
+  });
+});
+
+dash.draw('st-ct', (el) => {
+  const b = dash.data('by_stage');
+  const row = b.status === 'ok' && b.data ? b.data.find((d) => d.단계순서 === +el.dataset.st) : null;
+  el.textContent = row ? `${row.합계}곳` : '—';
+});
+
+// 지도
+dash.draw('map', {
+  mount(el) {
+    const made = { svg: null, zoom: null, t: d3.zoomIdentity, W: 0, H: 0, lastGu: null };
+    window.SR_zoom = {
+      by(f) { if (made.svg) made.svg.transition().duration(250).call(made.zoom.scaleBy, f); },
+      reset() { if (made.svg) made.svg.transition().duration(400).call(made.zoom.transform, d3.zoomIdentity); },
+    };
+    return made;
+  },
+  update(el, made) {
+    const z = dash.data('zones'), g = dash.data('gu'), r = dash.data('redev');
+    el.replaceChildren();
+    if (z.status !== 'ok' || g.status !== 'ok' || r.status !== 'ok' || !z.data || !g.data) {
+      if ([z, g, r].some((s) => s.status === 'error')) { const p = document.createElement('p'); p.className = 'sr-fail'; p.textContent = '지도를 불러오지 못했습니다'; el.appendChild(p); }
+      return;
+    }
+    const byCode = new Map(r.data.map((d) => [String(d.CODE), d]));
+    const shown = new Set(window.srFiltered(r.data).map((d) => String(d.CODE)));
+    const W = Math.max(280, el.clientWidth), H = Math.round(Math.max(380, Math.min(680, W * 0.82)));
+    const k = Math.cos(37.55 * Math.PI / 180);
+    const all = [];
+    g.data.features.forEach((f) => { const c = f.geometry.coordinates; (f.geometry.type === 'Polygon' ? [c] : c).forEach((p) => p.forEach((ring) => ring.forEach((pt) => all.push(pt)))); });
+    const xs = d3.extent(all, (p) => p[0] * k), ys = d3.extent(all, (p) => p[1]);
+    const pad = 12, s = Math.min((W - 2 * pad) / (xs[1] - xs[0]), (H - 2 * pad) / (ys[1] - ys[0]));
+    const ox = (W - s * (xs[1] - xs[0])) / 2, oy = (H - s * (ys[1] - ys[0])) / 2;
+    const proj = d3.geoTransform({ point(lon, lat) { this.stream.point(ox + (lon * k - xs[0]) * s, oy + (ys[1] - lat) * s); } });
+    const path = d3.geoPath(proj);
+
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img')
+      .attr('aria-label', '서울 자치구 지도 위에 재개발 구역을 진행 단계별 색으로 표시');
+    const root = svg.append('g');
+    const S = window.SR;
+    root.append('g').selectAll('path').data(g.data.features).join('path')
+      .attr('class', (f) => 'gu' + (S.gu && f.properties.name === S.gu ? ' on' : '')).attr('d', path);
+
+    const tip = window.srTip(el);
+    const feats = z.data.features.filter((f) => byCode.has(String(f.properties.CODE)))
+      .map((f) => { const d = byCode.get(String(f.properties.CODE)); const a = path.area(f); return { f, d, a, c: path.centroid(f) }; })
+      .sort((a, b) => b.a - a.a);
+    const hover = (ev, o) => {
+      const lines = [`${o.d.자치구} · ${window.SR_STAGES[+o.d.단계순서 - 1]}`];
+      if (window.srNum(o.d.건립세대수)) lines.push(`계획 ${window.srFmt(window.srNum(o.d.건립세대수))}세대`);
+      lines.push('누르면 상세 정보');
+      tip.show(ev, o.d.구역명, lines);
+    };
+    const pick = (ev, o) => { ev.stopPropagation(); tip.hide(); window.srSelect(o.d.CODE); };
+    const cls = (o, base) => base + (shown.has(String(o.d.CODE)) ? '' : ' off') + (S.sel === String(o.d.CODE) ? ' sel' : '');
+    root.append('g').selectAll('path').data(feats).join('path')
+      .attr('class', (o) => cls(o, 'zone')).attr('d', (o) => path(o.f))
+      .style('fill', (o) => window.srStageColor(+o.d.단계순서))
+      .on('mousemove', hover).on('mouseleave', () => tip.hide()).on('click', pick);
+    // 작은 구역은 점으로도 표시 (확대하면 사라짐)
+    const dots = root.append('g').selectAll('circle').data(feats.filter((o) => o.a < 60)).join('circle')
+      .attr('class', (o) => cls(o, 'dot')).attr('cx', (o) => o.c[0]).attr('cy', (o) => o.c[1])
+      .style('fill', (o) => window.srStageColor(+o.d.단계순서))
+      .on('mousemove', hover).on('mouseleave', () => tip.hide()).on('click', pick);
+    const labels = root.append('g').selectAll('text').data(g.data.features).join('text').attr('class', 'gulab')
+      .attr('x', (f) => path.centroid(f)[0]).attr('y', (f) => path.centroid(f)[1]).text((f) => f.properties.name);
+
+    const apply = (t) => {
+      root.attr('transform', t);
+      dots.attr('r', 3.6 / t.k).style('display', (o) => (o.a * t.k * t.k < 120 ? null : 'none'));
+      labels.style('font-size', `${11 / Math.sqrt(t.k)}px`).style('stroke-width', `${3 / t.k}px`).style('display', W < 420 && t.k < 1.5 ? 'none' : null);
+    };
+    const zoom = d3.zoom().scaleExtent([1, 40]).translateExtent([[-W * 0.2, -H * 0.2], [W * 1.2, H * 1.2]])
+      .on('zoom', (ev) => { made.t = ev.transform; apply(ev.transform); tip.hide(); });
+    svg.call(zoom).on('dblclick.zoom', null);
+    made.svg = svg; made.zoom = zoom; made.W = W; made.H = H;
+
+    const fitTo = (bounds, maxK) => {
+      const [[x0, y0], [x1, y1]] = bounds;
+      const kk = Math.min(maxK, 0.85 / Math.max((x1 - x0) / W, (y1 - y0) / H));
+      return d3.zoomIdentity.translate(W / 2, H / 2).scale(kk).translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
+    };
+    let target = made.t;
+    if (S.gu !== made.lastGu) {
+      const gf = g.data.features.find((f) => f.properties.name === S.gu);
+      target = gf ? fitTo(path.bounds(gf), 8) : d3.zoomIdentity;
+      made.lastGu = S.gu;
+    }
+    if (S.focus) {
+      const o = feats.find((x) => String(x.d.CODE) === S.focus);
+      if (o) target = fitTo(path.bounds(o.f), 14);
+      S.focus = null;
+    }
+    svg.call(zoom.transform, made.t);
+    apply(made.t);
+    if (target !== made.t) svg.transition().duration(500).call(zoom.transform, target);
+  },
+});
+
+// 자치구 선택
+dash.draw('gu-select', (sel) => {
+  const r = dash.data('redev');
+  const gus = r.status === 'ok' ? [...new Set(r.data.map((d) => d.자치구))].sort(d3.ascending) : [];
+  sel.replaceChildren(new Option('전체', ''), ...gus.map((g) => new Option(g, g)));
+  sel.value = window.SR.gu;
+  sel.onchange = () => { window.SR.gu = sel.value; window.srRedrawAll(); };
+});
+
+dash.draw('count', (el) => {
+  const r = dash.data('redev');
+  el.textContent = r.status === 'ok' ? `${window.srFiltered(r.data).length}곳 / 전체 ${r.data.length}곳` : '—';
+});
+
+// 상세 패널
+const srD = (name, fn) => dash.draw(name, (el) => {
+  const d = window.srRow();
+  if (el.dataset.source === 'redev' || el.closest('[data-source="redev"]')) { if (d) el.dataset.where = `CODE=${d.CODE}`; }
+  fn(el, d);
+});
+srD('d-gu', (el, d) => { el.textContent = d ? d.자치구 : '—'; });
+srD('d-name', (el, d) => { el.textContent = d ? d.구역명 : '—'; });
+srD('d-stage', (el, d) => {
+  el.textContent = d ? window.SR_STAGES[+d.단계순서 - 1] : '';
+  el.style.background = d ? window.srStageColor(+d.단계순서) : '';
+  const c = d ? d3.color(window.srStageColor(+d.단계순서)) : null;
+  el.style.color = c && (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255 < 0.5 ? '#ffffff' : '#0b0b0b';
+});
+srD('d-type', (el, d) => { el.textContent = d ? window.srStr(d.사업유형) : ''; });
+srD('d-pub', (el, d) => { el.textContent = d && d.공공민간 === '공공' ? '공공재개발' : ''; });
+srD('d-chok', (el, d) => { el.textContent = d && d.재촉지구 === 'Y' ? '재정비촉진구역' : ''; });
+dash.draw('d-nomap', (el) => {
+  const d = window.srRow(), z = dash.data('zones');
+  const has = d && z.status === 'ok' && z.data && z.data.features.some((f) => String(f.properties.CODE) === String(d.CODE));
+  el.hidden = !d || z.status !== 'ok' || has;
+});
+srD('d-recent', (el, d) => { el.textContent = d && d.최근이벤트 ? d.최근이벤트 : '—'; });
+srD('d-recentdt', (el, d) => { el.textContent = d && d.최근일자 ? d.최근일자 : '—'; });
+dash.draw('d-chg', (el) => {
+  const d = window.srRow(); const c = d ? window.srStr(d.변화_26년3월대비) : '';
+  el.textContent = c ? ` · 3월 대비 ${c.replace('신규 편입(26.3 목록에 없음)', '6월에 새로 편입').replace('단계 상승: ', '').replace('단계 변경: ', '')}` : '';
+  el.className = c.startsWith('단계 상승') ? 'sr-up' : c.startsWith('신규') ? 'sr-new' : '';
+});
+dash.draw('d-step', (li) => {
+  const d = window.srRow(), st = +li.dataset.st;
+  const field = ['일자_구역지정', '일자_추진위', '일자_조합설립', '일자_건축심의', '일자_사업시행', '일자_관리처분', '일자_착공'][st - 1];
+  const dt = li.querySelector('.dt'), pt = li.querySelector('.pt');
+  const cur = d ? +d.단계순서 : 0;
+  li.className = !d ? '' : st < cur ? 'done' : st === cur ? 'done now' : '';
+  if (pt) pt.style.background = d && st <= cur ? window.srStageColor(st) : '';
+  if (dt) {
+    if (d) dt.dataset.where = `CODE=${d.CODE}`;
+    const v = d ? window.srStr(d[field]) : '';
+    dt.textContent = v || (d && st <= cur ? '날짜 없음' : '');
+  }
+});
+const srN = (v, unit) => { const x = window.srNum(v); return x == null || x === 0 ? '—' : window.srFmt(Math.round(x)) + unit; };
+srD('d-units', (el, d) => { el.textContent = d ? srN(d.건립세대수, '세대') : '—'; });
+dash.draw('d-split', (el) => { const d = window.srRow(); el.textContent = d && window.srNum(d.건립세대수) ? `${srN(d.분양세대수, '')} / ${srN(d.임대세대수, '')}` : '—'; });
+srD('d-exist', (el, d) => { el.textContent = d ? srN(d.기존가구수, '가구') : '—'; });
+srD('d-area', (el, d) => {
+  const x = d ? window.srNum(d.면적_m2) : null;
+  el.textContent = x ? `${window.srFmt(Math.round(x))}㎡ (약 ${window.srFmt(Math.round(x / 3.3058))}평)` : '—';
+});
+dash.draw('d-move', (el) => {
+  const d = window.srRow();
+  const a = d ? window.srStr(d.일자_이주시작) : '', b = d ? window.srStr(d.일자_이주종료) : '';
+  el.textContent = a || b ? `${a || '?'} ~ ${b || '진행 중'}` : '—';
+});
+srD('d-con', (el, d) => { el.textContent = d && d.시공사 ? d.시공사 : '확인 안 됨'; });
+srD('d-addr', (el, d) => { el.textContent = d ? [d.지번주소, d.도로명주소].map(window.srStr).filter(Boolean).join(' · ') : '—'; });
+dash.draw('d-consrc', (el) => {
+  const d = window.srRow(); el.replaceChildren();
+  const src = d ? window.srStr(d.시공사_출처) : '';
+  if (!src) return;
+  const m = src.match(/https?:\/\/\S+/);
+  el.append('시공사 출처: ' + src.replace(/https?:\/\/\S+/, '').trim() + ' ');
+  if (m) { const a = document.createElement('a'); a.href = m[0]; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '기사 보기'; el.appendChild(a); }
+});
+
+// 단계별 막대
+dash.draw('stage-chart', (el) => {
+  const res = dash.data('by_stage');
+  el.replaceChildren();
+  if (res.status !== 'ok' || !res.data) {
+    if (res.status === 'error') { const p = document.createElement('p'); p.className = 'sr-fail'; p.textContent = '불러오지 못했습니다'; el.appendChild(p); }
+    return;
+  }
+  const rows = res.data, W = Math.max(280, el.clientWidth), rowH = 32, top = 4, H = rows.length * rowH + top + 24;
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img')
+    .attr('aria-label', '단계별 재개발 구역 수, 주택정비형과 도시정비형으로 나눈 가로 막대');
+  const labels = svg.append('g').selectAll('text').data(rows).join('text').attr('class', 'muted').text((d) => d.단계);
+  const lw = d3.max(labels.nodes(), (n) => n.getComputedTextLength()) || 70;
+  const left = lw + 12, right = 34;
+  const x = d3.scaleLinear().domain([0, d3.max(rows, (d) => d.합계) || 1]).nice().range([left, W - right]);
+  const y = (i) => top + i * rowH;
+  labels.attr('x', left - 8).attr('y', (d, i) => y(i) + rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end');
+  svg.append('g').attr('class', 'grid').attr('transform', `translate(0,${top + rows.length * rowH})`)
+    .call(d3.axisBottom(x).ticks(Math.max(2, Math.floor((W - left) / 70))).tickSize(-rows.length * rowH).tickPadding(6));
+  const tip = window.srTip(el);
+  rows.forEach((d, i) => {
+    [['주택정비형', d.주택정비형, 'var(--sr-accent)', 0], ['도시정비형', d.도시정비형, 'var(--sr-accent2)', d.주택정비형]].forEach(([name, v, c, start]) => {
+      if (!v) return;
+      svg.append('rect').attr('x', x(start)).attr('y', y(i) + 6).attr('width', Math.max(0, x(start + v) - x(start) - 2)).attr('height', rowH - 12)
+        .attr('rx', 3).style('fill', c)
+        .on('mousemove', (ev) => tip.show(ev, `${d.단계} · ${name} 재개발`, [`${v}곳 (이 단계 전체 ${d.합계}곳)`]))
+        .on('mouseleave', () => tip.hide());
+    });
+    svg.append('text').attr('x', x(d.합계) + 6).attr('y', y(i) + rowH / 2).attr('dy', '0.35em').text(d.합계);
+  });
+});
+
+// 자치구별 단계 막대 (누르면 지도 이동)
+dash.draw('gu-chart', (el) => {
+  const res = dash.data('by_gu');
+  el.replaceChildren();
+  if (res.status !== 'ok' || !res.data) {
+    if (res.status === 'error') { const p = document.createElement('p'); p.className = 'sr-fail'; p.textContent = '불러오지 못했습니다'; el.appendChild(p); }
+    return;
+  }
+  const rows = res.data, W = Math.max(280, el.clientWidth), rowH = 22, top = 2, H = rows.length * rowH + top + 24;
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img')
+    .attr('aria-label', '자치구별 재개발 구역 수를 단계별로 쌓은 가로 막대');
+  const labels = svg.append('g').selectAll('text').data(rows).join('text').attr('class', 'muted').text((d) => d.자치구);
+  const lw = d3.max(labels.nodes(), (n) => n.getComputedTextLength()) || 50;
+  const left = lw + 10, right = 30;
+  const x = d3.scaleLinear().domain([0, d3.max(rows, (d) => d.합계) || 1]).nice().range([left, W - right]);
+  const y = (i) => top + i * rowH;
+  labels.attr('x', left - 8).attr('y', (d, i) => y(i) + rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end');
+  svg.append('g').attr('class', 'grid').attr('transform', `translate(0,${top + rows.length * rowH})`)
+    .call(d3.axisBottom(x).ticks(Math.max(2, Math.floor((W - left) / 60))).tickSize(-rows.length * rowH).tickPadding(6));
+  const tip = window.srTip(el);
+  const go = (gu) => { window.SR.gu = gu; document.querySelectorAll('#sr-gu').forEach((s) => { s.value = gu; }); window.srRedrawAll(); document.querySelectorAll('#map').forEach((m) => m.scrollIntoView({ behavior: 'smooth', block: 'start' })); };
+  rows.forEach((d, i) => {
+    let acc = 0;
+    const g = svg.append('g').style('cursor', 'pointer').style('opacity', window.SR.gu && window.SR.gu !== d.자치구 ? 0.4 : 1).on('click', () => go(d.자치구));
+    g.append('rect').attr('x', 0).attr('y', y(i)).attr('width', W).attr('height', rowH).style('fill', 'transparent');
+    for (let s = 1; s <= 7; s++) {
+      const v = d['s' + s];
+      if (v) {
+        const x0 = acc;
+        g.append('rect').attr('x', x(x0)).attr('y', y(i) + 4).attr('width', Math.max(0, x(x0 + v) - x(x0) - 1.5)).attr('height', rowH - 8)
+          .attr('rx', 2).style('fill', window.srStageColor(s))
+          .on('mousemove', (ev) => tip.show(ev, `${d.자치구} · ${window.SR_STAGES[s - 1]}`, [`${v}곳 (구 전체 ${d.합계}곳)`, '누르면 지도에서 보기']))
+          .on('mouseleave', () => tip.hide());
+      }
+      acc += v;
+    }
+    g.append('text').attr('x', x(d.합계) + 6).attr('y', y(i) + rowH / 2).attr('dy', '0.35em').text(d.합계);
+  });
+});
+
+// 표
+dash.draw('table', (tb) => {
+  const r = dash.data('redev');
+  tb.replaceChildren();
+  if (r.status !== 'ok') return;
+  const S = window.SR, numCols = new Set(['건립세대수', '면적_m2', '단계순서']);
+  const val = (o) => (numCols.has(S.sort) ? (window.srNum(o[S.sort]) ?? -1) : window.srStr(o[S.sort]));
+  const rows = window.srFiltered(r.data).slice().sort((a, b) => {
+    const va = val(a), vb = val(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * S.dir || d3.ascending(a.자치구, b.자치구) || d3.ascending(a.구역명, b.구역명);
+  });
+  rows.forEach((d) => {
+    const tr = document.createElement('tr');
+    tr.dataset.key = d.CODE;
+    if (S.sel === String(d.CODE)) tr.className = 'sel';
+    tr.tabIndex = 0;
+    const td = (txt, cls) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = txt ?? ''; tr.appendChild(c); return c; };
+    td(d.자치구); td(d.구역명); td(window.srStr(d.사업유형).replace(' 재개발', ''));
+    const st = td(''); const pill = document.createElement('span'); pill.className = 'sr-pill';
+    const sw = document.createElement('span'); sw.className = 'sr-sw'; sw.style.background = window.srStageColor(+d.단계순서);
+    const tx = document.createElement('span'); tx.textContent = d.단계; pill.append(sw, tx); st.appendChild(pill);
+    td(window.srStr(d.최근이벤트)); td(window.srStr(d.최근일자));
+    const chg = window.srStr(d.변화_26년3월대비);
+    const ch = td(chg.replace('신규 편입(26.3 목록에 없음)', '신규 편입'));
+    if (chg.startsWith('단계 상승')) ch.className = 'sr-up'; else if (chg.startsWith('신규')) ch.className = 'sr-new';
+    const n = (v) => { const x = window.srNum(v); return x == null || x === 0 ? '' : window.srFmt(Math.round(x)); };
+    td(n(d.건립세대수), 'n'); td(n(d.면적_m2), 'n'); td(window.srStr(d.시공사));
+    const open = () => window.srSelect(d.CODE, { focus: true, scroll: true });
+    tr.onclick = open;
+    tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    tb.appendChild(tr);
+  });
+});
+
+// 컨트롤 듣기
+document.querySelectorAll('#sr-q').forEach((el) => el.addEventListener('input', () => { window.SR.q = el.value; window.srRedrawAll(); }));
+document.querySelectorAll('#sr-type').forEach((el) => el.addEventListener('change', () => { window.SR.type = el.value; window.srRedrawAll(); }));
+document.querySelectorAll('#sr-flag').forEach((el) => el.addEventListener('change', () => { window.SR.flag = el.value; window.srRedrawAll(); }));
+document.querySelectorAll('.sr-stage[data-st]').forEach((btn) => btn.addEventListener('click', () => {
+  const st = +btn.dataset.st, S = window.SR.stages;
+  // 모두 켜져 있을 때 누르면 그 단계만, 아니면 켜고 끄기
+  if (S.size === 7) { S.clear(); S.add(st); } else if (S.has(st)) { S.delete(st); if (!S.size) [1, 2, 3, 4, 5, 6, 7].forEach((i) => S.add(i)); } else S.add(st);
+  document.querySelectorAll('.sr-stage[data-st]').forEach((b) => b.setAttribute('aria-pressed', String(S.has(+b.dataset.st))));
+  window.srRedrawAll();
+}));
+document.querySelectorAll('#sr-allstages').forEach((btn) => btn.addEventListener('click', () => {
+  [1, 2, 3, 4, 5, 6, 7].forEach((i) => window.SR.stages.add(i));
+  document.querySelectorAll('.sr-stage[data-st]').forEach((b) => b.setAttribute('aria-pressed', 'true'));
+  window.srRedrawAll();
+}));
+document.querySelectorAll('#sr-zin').forEach((b) => b.addEventListener('click', () => window.SR_zoom && window.SR_zoom.by(1.6)));
+document.querySelectorAll('#sr-zout').forEach((b) => b.addEventListener('click', () => window.SR_zoom && window.SR_zoom.by(1 / 1.6)));
+document.querySelectorAll('#sr-zreset').forEach((b) => b.addEventListener('click', () => window.SR_zoom && window.SR_zoom.reset()));
+document.querySelectorAll('.sr-table th[data-sort]').forEach((th) => th.addEventListener('click', () => {
+  const key = th.dataset.sort;
+  if (window.SR.sort === key) window.SR.dir *= -1; else { window.SR.sort = key; window.SR.dir = ['단계순서', '건립세대수', '면적_m2', '최근일자'].includes(key) ? -1 : 1; }
+  document.querySelectorAll('.sr-table th[data-sort]').forEach((h) => h.removeAttribute('aria-sort'));
+  th.setAttribute('aria-sort', window.SR.dir > 0 ? 'ascending' : 'descending');
+  dash.draw('table');
+}));
+</script>
+
+</div>
+<script>window.__dashStart();</script>
+</body>
+</html>
